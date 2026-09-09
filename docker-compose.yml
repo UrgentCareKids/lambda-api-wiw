@@ -1,6 +1,6 @@
 version: "3.8"
 services:
-  lambda-paylocity-api:
+  lambda-api-wiw:
     container_name: ${CONTAINER_NAME}
     build:
       dockerfile: Dockerfile
@@ -11,4 +11,5 @@ services:
       - .env/local
     volumes:
       - ./src:/var/task
+      - ./db:/var/task/db
       - ./tests:/var/tests

@@ -1,2 +1,5 @@
 src/__pycache__
+db/__pycache__
 .git
+.github
+tests
