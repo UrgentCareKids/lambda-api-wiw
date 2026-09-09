@@ -20,3 +20,25 @@ def easebase_conn():
     conn = psycopg2.connect(host=hostname,user=dbusername,port=portno,password=dbpassword,dbname=dbname)
     conn.autocommit = False
     return conn
+
+_conn = None
+
+
+def get_conn():
+    """easebase_conn(), reused across warm Lambda invocations."""
+    global _conn
+    if _conn is not None and _conn.closed == 0:
+        try:
+            with _conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            _conn.commit()
+            return _conn
+        except psycopg2.Error:
+            try:
+                _conn.close()
+            except psycopg2.Error:
+                pass
+            _conn = None
+
+    _conn = easebase_conn()
+    return _conn
