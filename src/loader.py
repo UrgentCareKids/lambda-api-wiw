@@ -14,6 +14,7 @@ so nothing is actually lost.
 import datetime as dt
 import json
 import os
+from email.utils import parsedate_to_datetime
 
 from psycopg2.extras import Json, execute_values
 
@@ -40,8 +41,12 @@ COLUMN_TYPES = {
     "id": "bigint", "account_id": "bigint", "login_id": "bigint",
     "user_id": "bigint", "location_id": "bigint", "position_id": "bigint",
     "site_id": "bigint", "shift_id": "bigint", "creator_id": "bigint",
-    "created_by": "bigint", "updated_by": "bigint", "modified_by": "bigint",
+    "created_by": "bigint", "modified_by": "bigint",
     "openshift_approval_request_id": "bigint", "sort": "bigint",
+
+    # updated_by is not an id -- the API returns
+    # {"service": ..., "wiw": ...} for records touched by their backend.
+    "updated_by": "jsonb",
 
     # measures
     "hours_max": "numeric", "hours_preferred": "numeric",
@@ -108,6 +113,33 @@ def column_type(name):
     return COLUMN_TYPES.get(name, "text")
 
 
+def parse_timestamp(value, column):
+    """ISO first, RFC-2822 second, NULL if it isn't a plausible date.
+
+    The API emits things like "Mon, 29 Nov -001 18:09:24 -0550" for
+    never-set fields. Postgres rejects those outright and takes the whole
+    batch down with it, so they get parsed here and dropped instead. The
+    original string is still in `raw`.
+    """
+    text = str(value).strip()
+    if text.lower() in NULL_TIMESTAMPS or text.startswith("0000-00-00"):
+        return None
+
+    parsed = None
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError):
+            parsed = None
+
+    if parsed is None or not (1970 <= parsed.year <= 2200):
+        _warn(column, value)
+        return None
+    return parsed
+
+
 def coerce(value, sqltype, column):
     if value is None:
         return None
@@ -121,10 +153,7 @@ def coerce(value, sqltype, column):
     if sqltype == "timestamptz":
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return dt.datetime.fromtimestamp(value, UTC)
-        text = str(value).strip().lower()
-        if text in NULL_TIMESTAMPS or text.startswith("0000-00-00"):
-            return None
-        return value  # Postgres parses the ISO-8601 string itself
+        return parse_timestamp(value, column)
 
     if sqltype == "boolean":
         if isinstance(value, bool):
@@ -180,7 +209,10 @@ def ensure_table(cur, entity):
     body += ['"raw" jsonb',
              '"_api_deleted" boolean NOT NULL DEFAULT false',
              '"_synced_at" timestamptz NOT NULL DEFAULT now()']
-    
+
+    # The schema is managed outside this job -- creating one here would
+    # silently paper over a typo'd WIW_SCHEMA or a connection pointing at
+    # the wrong database.
     cur.execute("SELECT 1 FROM pg_namespace WHERE nspname = %s", (SCHEMA,))
     if not cur.fetchone():
         raise RuntimeError(
