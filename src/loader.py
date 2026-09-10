@@ -109,7 +109,19 @@ def _warn(column, value):
     _warnings.setdefault(column, repr(value)[:80])
 
 
+# Staging default: every column is text. Nothing the API returns can
+# fail to load, and casting happens downstream where you control it.
+# Set WIW_TYPED_COLUMNS=1 to use the typed map below instead.
+STRICT_TYPES = os.environ.get("WIW_TYPED_COLUMNS", "").lower() in (
+    "1", "true", "yes")
+
+
 def column_type(name):
+    # id stays bigint: it's the primary key and the ON CONFLICT target.
+    if name == "id":
+        return "bigint"
+    if not STRICT_TYPES:
+        return "text"
     return COLUMN_TYPES.get(name, "text")
 
 
@@ -185,8 +197,15 @@ def coerce(value, sqltype, column):
             return None
 
     if isinstance(value, (dict, list)):
-        # An unexpected structure in a text column -- keep it readable.
+        # Structures in a text column -- keep them as valid JSON so a
+        # downstream cast to jsonb works.
         return json.dumps(value, separators=(",", ":"))
+    if sqltype == "text" and not isinstance(value, str):
+        # Postgres won't implicitly cast integer/boolean to text on
+        # INSERT, so it has to be done here.
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
     return value
 
 
